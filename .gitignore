@@ -1,0 +1,24 @@
+# Exclude Excel files (datasets, reports, intermediate calculations)
+*.xlsx
+
+# Exclude text files (checkpoints, processed logs, index lists)
+*.txt
+
+# Exclude Joblib machine learning models
+*.joblib
+
+# Exclude log files
+*.log
+
+# Exclude Python temporary files and caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+
+# Exclude Jupyter Notebook checkpoints
+.ipynb_checkpoints/
