@@ -6,6 +6,7 @@
 
 # Exclude Joblib machine learning models
 *.joblib
+*.pkl
 
 # Exclude log files
 *.log
