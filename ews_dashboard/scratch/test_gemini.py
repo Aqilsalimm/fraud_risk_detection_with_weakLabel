@@ -1,7 +1,8 @@
 import requests
 import json
+import os
 
-api_key = "[GCP_API_KEY]"
+api_key = os.getenv("GEMINI_API_KEY")
 headers = {"Content-Type": "application/json"}
 payload = {
     "contents": [{

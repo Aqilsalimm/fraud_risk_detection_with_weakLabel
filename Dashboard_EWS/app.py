@@ -8,6 +8,8 @@ import re
 import tempfile
 import requests
 import json
+from pathlib import Path
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -271,7 +273,15 @@ def generate_gemini_commentary(
     model_b: dict,
     model_a: dict
 ) -> str:
-    GEMINI_API_KEY = "[GCP_API_KEY]"
+    this_path = Path(__file__).resolve().parent
+    path_to_env = this_path.parent / 'ews_dashboard' / '.env'
+    load_dotenv(dotenv_path=path_to_env)
+    
+    api_key = os.getenv("GEMINI_API_KEY")
+    print("\n=========================")
+    print("GEMINI API KEY:")
+    print(api_key)
+    print("=========================\n")
     
     # Build list of top drivers for prompt
     feature_labels = {
@@ -331,7 +341,7 @@ Paragraf 3: Berikan rekomendasi langkah audit atau investigasi spesifik yang per
 
 Penting: Tulis secara profesional, padat, tanpa basa-basi pembuka/penutup, dan langsung berfokus pada substansi analisis laporan keuangan dalam bahasa Indonesia yang baik dan benar."""
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
     payload = {
         "contents": [{
