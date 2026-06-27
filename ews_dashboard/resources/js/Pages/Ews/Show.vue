@@ -234,6 +234,13 @@ const formatDouble = (num, decimals = 4) => {
                             <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path></svg>
                             AI Commentary (Gemini LLM)
                         </button>
+                        <button 
+                            @click="activeTab = 'export'"
+                            :class="`flex-1 py-3 text-center text-xs font-bold rounded-xl transition duration-200 flex items-center justify-center gap-1.5 ${activeTab === 'export' ? 'bg-white text-indigo-600 shadow dark:bg-slate-900 dark:text-indigo-400' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'}`"
+                        >
+                            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                            Export Report
+                        </button>
                     </div>
 
                     <!-- Panel 1: Financial & Beneish -->
@@ -706,6 +713,27 @@ const formatDouble = (num, decimals = 4) => {
                             <div>
                                 <strong class="font-bold text-slate-700 dark:text-slate-300">Catatan Model AI:</strong>
                                 Analisis ini mengintegrasikan metrik Beneish M-Score, Anomaly Score dari Isolation Forest, sentimen dari laporan tahunan (Annual Report), rasio CFO-to-Net Income, serta penjelasan SHAP kontribusi fitur dari Model A dan Model B. Hasil interpretasi ini ditujukan sebagai alat bantu pengambilan keputusan dan harus selalu diverifikasi dengan kertas kerja audit lapangan.
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Panel 5: Export Report -->
+                    <div v-if="activeTab === 'export'" class="p-6 space-y-6">
+                        <div class="max-w-2xl mx-auto text-center py-12 space-y-6">
+                            <div class="w-20 h-20 bg-rose-50 dark:bg-rose-950/20 text-rose-500 rounded-full flex items-center justify-center mx-auto border border-rose-100 dark:border-rose-900/30 shadow-sm">
+                                <svg class="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                            </div>
+                            <div class="space-y-2">
+                                <h3 class="text-xl font-bold text-slate-800 dark:text-slate-100">Export Fraud Risk Detection Report</h3>
+                                <p class="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto leading-relaxed">
+                                    Download a comprehensive PDF report containing the Fraud Risk Score calculation, Beneish M-Score indices, narrative risk details, and the global SHAP feature importance visualization.
+                                </p>
+                            </div>
+                            <div>
+                                <a :href="route('ews.export', record.id)" target="_blank" class="inline-flex items-center gap-2 py-3 px-6 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-sm font-bold shadow-md transition duration-200">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                                    Download PDF Report
+                                </a>
                             </div>
                         </div>
                     </div>

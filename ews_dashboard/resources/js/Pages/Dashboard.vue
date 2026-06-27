@@ -392,6 +392,9 @@ const calculateStrokeOffset = (score, radius) => {
                                     <th scope="col" class="relative px-6 py-3.5">
                                         <span class="sr-only">Actions</span>
                                     </th>
+                                    <th scope="col" class="relative px-6 py-3.5">
+                                        <span class="sr-only">Export</span>
+                                    </th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50 bg-white dark:bg-slate-800">
@@ -463,9 +466,16 @@ const calculateStrokeOffset = (score, radius) => {
                                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
                                         </Link>
                                     </td>
+                                    <!-- Export Action -->
+                                    <td class="px-6 py-4 whitespace-nowrap text-right text-xs font-semibold">
+                                        <a :href="route('ews.export', record.id)" target="_blank" class="inline-flex items-center gap-1 py-1.5 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-lg transition duration-150 shadow-sm">
+                                            Export
+                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                                        </a>
+                                    </td>
                                 </tr>
                                 <tr v-if="records.data.length === 0">
-                                    <td colspan="10" class="px-6 py-10 text-center text-slate-400 text-sm font-semibold">
+                                    <td colspan="11" class="px-6 py-10 text-center text-slate-400 text-sm font-semibold">
                                         No companies found matching the specified filters.
                                     </td>
                                 </tr>

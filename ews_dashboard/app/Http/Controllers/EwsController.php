@@ -8,6 +8,7 @@ use Inertia\Inertia;
 use Inertia\Response;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Barryvdh\DomPDF\Facade\Pdf;
 
 class EwsController extends Controller
 {
@@ -364,6 +365,289 @@ class EwsController extends Controller
             'mlModelAPrediction' => $ml_model_a_prediction,
             'featuresImpactA' => $featuresImpactA,
         ]);
+    }
+
+    /**
+     * Export EWS Fraud Report to PDF.
+     */
+    public function export(int $id)
+    {
+        $record = EwsRecord::findOrFail($id);
+
+        // Fetch historical records for the same company to show trends
+        $history = EwsRecord::where('kode', $record->kode)
+            ->orderBy('tahun', 'asc')
+            ->get(['id', 'tahun', 'combined_fraud_score', 'financial_risk_score', 'narrative_risk_score', 'weak_score']);
+
+        // Check weak label rules breakdown for audit display
+        $rule1 = $record->m_score !== null && $record->m_score > -2.22;
+        $rule2 = $record->anomaly_score_05 !== null && $record->anomaly_score_05 > 0.3; 
+        $rule3 = $record->narrative_risk_score !== null && $record->narrative_risk_score > 60;
+        $rule4 = $record->cfo_quality_flag !== null && ($record->cfo_quality_flag === 'Low Quality' || $record->cfo_quality_flag === '1' || $record->cfo_quality_flag === 1);
+        $rule5 = $record->revenue_growth !== null && $record->revenue_growth > 0.3;
+
+        // Build features payload for FastAPI XGBoost & SHAP model (16 features)
+        $payload = [
+            'dsri' => (double) ($record->dsri ?? 1.0),
+            'gmi' => (double) ($record->gmi ?? 1.0),
+            'aqi' => (double) ($record->aqi ?? 1.0),
+            'sgi' => (double) ($record->sgi ?? 1.0),
+            'lvgi' => (double) ($record->lvgi ?? 1.0),
+            'tata' => (double) ($record->tata ?? 0.0),
+            'sgai' => (double) ($record->sgai ?? 1.0),
+            'revenue_growth' => (double) ($record->revenue_growth ?? 0.0),
+            'asset_growth' => (double) ($record->asset_growth ?? 0.0),
+            'net_income_growth_assets' => (double) ($record->net_income_growth_assets ?? 0.0),
+            'cfo_to_net_income' => (double) ($record->cfo_to_net_income ?? 0.0),
+            'sentiment' => (double) ($record->sentiment ?? 0.0),
+            'risk_words' => (double) ($record->risk_words ?? 0.0),
+            'readability' => (double) ($record->readability ?? 0.0),
+            'text_length' => (double) ($record->text_length ?? 0.0),
+            'anomaly_score_05' => (double) ($record->anomaly_score_05 ?? 0.0),
+        ];
+
+        // Only request AI Commentary generation if it does not already exist in DB
+        if (empty($record->ai_commentary)) {
+            $payload['nama_perusahaan'] = $record->nama_perusahaan ?? '';
+            $payload['kode'] = $record->kode ?? '';
+            $payload['year'] = (int) ($record->tahun ?? 0);
+            $payload['sektor'] = $record->sektor ?? '';
+        }
+
+        // Call FastAPI (Defaulting to host.docker.internal inside Docker container)
+        $fastapi_url = env('FASTAPI_API_URL', 'http://host.docker.internal:8000');
+        $ml_api_available = false;
+        
+        $ml_model_b_probability = null;
+        $ml_model_b_prediction = null;
+        $featuresImpactB = [];
+        
+        $ml_model_a_probability = null;
+        $ml_model_a_prediction = null;
+        $featuresImpactA = [];
+
+        try {
+            $response = Http::timeout(30)->post($fastapi_url . '/predict', $payload);
+            if ($response->successful()) {
+                $data = $response->json();
+                $ml_api_available = true;
+                
+                // Save AI Commentary if returned and not cached in DB
+                if (!empty($data['ai_commentary']) && empty($record->ai_commentary)) {
+                    $record->ai_commentary = $data['ai_commentary'];
+                    $record->save();
+                }
+                
+                $featureLabels = [
+                    'dsri' => 'DSRI (Days Sales in Receivables Index)',
+                    'gmi' => 'GMI (Gross Margin Index)',
+                    'aqi' => 'AQI (Asset Quality Index)',
+                    'sgi' => 'SGI (Sales Growth Index)',
+                    'lvgi' => 'LVGI (Leverage Index)',
+                    'tata' => 'TATA (Total Accruals to Total Assets)',
+                    'sgai' => 'SGAI (Sales General & Admin Index)',
+                    'revenue_growth' => 'Revenue Growth Rate',
+                    'asset_growth' => 'Asset Growth Rate',
+                    'net_income_growth_assets' => 'Net Income Growth / Assets',
+                    'cfo_to_net_income' => 'CFO to Net Income Ratio',
+                    'sentiment' => 'Narrative Sentiment',
+                    'risk_words' => 'Risk Words Frequency',
+                    'readability' => 'Readability Index',
+                    'text_length' => 'Text Length',
+                    'anomaly_score_05' => 'Anomaly Score (Isolation Forest)',
+                ];
+
+                // Parse Model B (t2)
+                $modelBData = $data['model_b'] ?? $data;
+                $ml_model_b_probability = round(($modelBData['fraud_probability'] ?? 0) * 100, 2);
+                $ml_model_b_prediction = $modelBData['fraud_prediction'] ?? 0;
+                
+                $driversB = $modelBData['top_drivers'] ?? [];
+                foreach ($driversB as $driver) {
+                    $featKey = $driver['feature'];
+                    $shapVal = $driver['shap_value'];
+                    $featuresImpactB[] = [
+                        'name' => $featureLabels[$featKey] ?? $featKey,
+                        'value' => round($record->{$featKey} ?? 0, 4),
+                        'impact' => $shapVal > 0 ? 'Pushes Risk Up' : 'Pushes Risk Down',
+                        'direction' => $shapVal > 0 ? 'up' : 'down',
+                        'weight' => abs($shapVal),
+                    ];
+                }
+
+                // Parse Model A (t3)
+                $modelAData = $data['model_a'] ?? [];
+                if (!empty($modelAData)) {
+                    $ml_model_a_probability = round(($modelAData['fraud_probability'] ?? 0) * 100, 2);
+                    $ml_model_a_prediction = $modelAData['fraud_prediction'] ?? 0;
+                    
+                    $driversA = $modelAData['top_drivers'] ?? [];
+                    foreach ($driversA as $driver) {
+                        $featKey = $driver['feature'];
+                        $shapVal = $driver['shap_value'];
+                        $featuresImpactA[] = [
+                            'name' => $featureLabels[$featKey] ?? $featKey,
+                            'value' => round($record->{$featKey} ?? 0, 4),
+                            'impact' => $shapVal > 0 ? 'Pushes Risk Up' : 'Pushes Risk Down',
+                            'direction' => $shapVal > 0 ? 'up' : 'down',
+                            'weight' => abs($shapVal),
+                        ];
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            \Log::warning("FastAPI Prediction Server connection failed: " . $e->getMessage());
+        }
+
+        // Fallback if API is offline or returns error
+        if (!$ml_api_available) {
+            $ml_model_b_probability = round($record->combined_fraud_score ?? 0, 2);
+            $ml_model_b_prediction = $record->weak_label_t2 ?? 0;
+
+            $ml_model_a_probability = round($record->combined_fraud_score ?? 0, 2);
+            $ml_model_a_prediction = $record->weak_label_t3 ?? 0;
+
+            $dummyImpacts = [
+                [
+                    'name' => 'TATA (Total Accruals to Total Assets)',
+                    'value' => round($record->tata ?? 0, 4),
+                    'impact' => $record->tata > 0.05 ? 'High Accruals Risk' : 'Normal',
+                    'direction' => $record->tata > 0.02 ? 'up' : 'down',
+                    'weight' => abs($record->tata ?? 0) * 15,
+                ],
+                [
+                    'name' => 'CFO to Net Income Ratio',
+                    'value' => round($record->cfo_to_net_income ?? 0, 4),
+                    'impact' => $record->cfo_quality_flag === 'Low Quality' ? 'Low Quality CFO' : 'Normal',
+                    'direction' => $record->cfo_quality_flag === 'Low Quality' ? 'up' : 'down',
+                    'weight' => $record->cfo_quality_flag === 'Low Quality' ? 22.5 : 5.0,
+                ],
+                [
+                    'name' => 'SGI (Sales Growth Index)',
+                    'value' => round($record->sgi ?? 0, 4),
+                    'impact' => $record->sgi > 1.2 ? 'Extreme Sales Growth' : 'Normal',
+                    'direction' => $record->sgi > 1.15 ? 'up' : 'down',
+                    'weight' => abs(($record->sgi ?? 1) - 1) * 10 + 2,
+                ],
+                [
+                    'name' => 'Risk Words (Narrative Density)',
+                    'value' => $record->risk_words ?? 0,
+                    'impact' => $record->risk_words > 80 ? 'High Risk Words Density' : 'Normal',
+                    'direction' => $record->risk_words > 60 ? 'up' : 'down',
+                    'weight' => ($record->risk_words ?? 0) / 10,
+                ],
+                [
+                    'name' => 'Anomaly Score (Isolation Forest)',
+                    'value' => round($record->anomaly_score_05 ?? 0, 4),
+                    'impact' => $record->anomaly_score_05 > 0.3 ? 'High Anomaly Outlier' : 'Normal',
+                    'direction' => $record->anomaly_score_05 > 0.35 ? 'up' : 'down',
+                    'weight' => ($record->anomaly_score_05 ?? 0) * 45,
+                ],
+            ];
+
+            usort($dummyImpacts, function ($a, $b) {
+                return $b['weight'] <=> $a['weight'];
+            });
+
+            $featuresImpactB = $dummyImpacts;
+            $featuresImpactA = $dummyImpacts;
+        }
+
+        $rulesStatus = [
+            [
+                'name' => 'Rule 1: Beneish M-Score Tinggi (> -2.22)',
+                'triggered' => $rule1,
+                'description' => 'M-Score is ' . round($record->m_score ?? 0, 2) . ', which indicates ' . ($rule1 ? 'high probability of manipulation.' : 'low probability of manipulation.'),
+                'badge' => $rule1 ? 'danger' : 'success',
+            ],
+            [
+                'name' => 'Rule 2: Isolation Forest Outlier',
+                'triggered' => $rule2,
+                'description' => 'Isolation Forest anomaly score is ' . round($record->anomaly_score_05 ?? 0, 4) . ' (> 0.3), meaning ' . ($rule2 ? 'company is a multivariate financial outlier.' : 'company exhibits normal patterns.'),
+                'badge' => $rule2 ? 'danger' : 'success',
+            ],
+            [
+                'name' => 'Rule 3: Narrative Risk Tinggi (> 60)',
+                'triggered' => $rule3,
+                'description' => 'Narrative risk score is ' . round($record->narrative_risk_score ?? 0, 2) . ', reflecting ' . ($rule3 ? 'aberrations in annual report sentiment, readability, and risk disclosures.' : 'normal report readability and sentiment.'),
+                'badge' => $rule3 ? 'danger' : 'success',
+            ],
+            [
+                'name' => 'Rule 4: CFO Quality Buruk',
+                'triggered' => $rule4,
+                'description' => 'CFO Quality Flag is ' . ($record->cfo_quality_flag ?? 'Normal') . '. Net Income is ' . number_format($record->net_income ?? 0) . ' but Operating Cash Flow is ' . number_format($record->cfo ?? 0) . '.',
+                'badge' => $rule4 ? 'danger' : 'success',
+            ],
+            [
+                'name' => 'Rule 5: Revenue Growth Extreme (> 30%)',
+                'triggered' => $rule5,
+                'description' => 'Revenue growth rate is ' . round(($record->revenue_growth ?? 0) * 100, 2) . '%, exceeding normal operating parameters.',
+                'badge' => $rule5 ? 'danger' : 'success',
+            ],
+        ];
+
+        // Global SHAP lists
+        $globalShapModelA = [
+            ['feature' => 'anomaly_score_05', 'name' => 'Anomaly Score (Isolation Forest)', 'importance' => 0.308738],
+            ['feature' => 'risk_words', 'name' => 'Risk Words Frequency', 'importance' => 0.172333],
+            ['feature' => 'sgi', 'name' => 'SGI (Sales Growth Index)', 'importance' => 0.148532],
+            ['feature' => 'tata', 'name' => 'TATA (Total Accruals to Total Assets)', 'importance' => 0.087434],
+            ['feature' => 'sentiment', 'name' => 'Narrative Sentiment', 'importance' => 0.053890],
+            ['feature' => 'text_length', 'name' => 'Text Length', 'importance' => 0.044062],
+            ['feature' => 'cfo_to_net_income', 'name' => 'CFO to Net Income Ratio', 'importance' => 0.041392],
+            ['feature' => 'asset_growth', 'name' => 'Asset Growth Rate', 'importance' => 0.037867],
+            ['feature' => 'readability', 'name' => 'Readability Index', 'importance' => 0.022627],
+            ['feature' => 'dsri', 'name' => 'DSRI (Days Sales in Receivables Index)', 'importance' => 0.021408],
+            ['feature' => 'gmi', 'name' => 'GMI (Gross Margin Index)', 'importance' => 0.019350],
+            ['feature' => 'net_income_growth_assets', 'name' => 'Net Income Growth / Assets', 'importance' => 0.014231],
+            ['feature' => 'lvgi', 'name' => 'LVGI (Leverage Index)', 'importance' => 0.011238],
+            ['feature' => 'sgai', 'name' => 'SGAI (Sales General & Admin Index)', 'importance' => 0.009093],
+            ['feature' => 'aqi', 'name' => 'AQI (Asset Quality Index)', 'importance' => 0.007805],
+            ['feature' => 'revenue_growth', 'name' => 'Revenue Growth Rate', 'importance' => 0.000000],
+        ];
+
+        $globalShapModelB = [
+            ['feature' => 'tata', 'name' => 'TATA (Total Accruals to Total Assets)', 'importance' => 0.189024],
+            ['feature' => 'cfo_to_net_income', 'name' => 'CFO to Net Income Ratio', 'importance' => 0.181863],
+            ['feature' => 'sgi', 'name' => 'SGI (Sales Growth Index)', 'importance' => 0.154076],
+            ['feature' => 'anomaly_score_05', 'name' => 'Anomaly Score (Isolation Forest)', 'importance' => 0.108183],
+            ['feature' => 'risk_words', 'name' => 'Risk Words Frequency', 'importance' => 0.056944],
+            ['feature' => 'revenue_growth', 'name' => 'Revenue Growth Rate', 'importance' => 0.054025],
+            ['feature' => 'dsri', 'name' => 'DSRI (Days Sales in Receivables Index)', 'importance' => 0.046694],
+            ['feature' => 'sentiment', 'name' => 'Narrative Sentiment', 'importance' => 0.040925],
+            ['feature' => 'aqi', 'name' => 'AQI (Asset Quality Index)', 'importance' => 0.031598],
+            ['feature' => 'text_length', 'name' => 'Text Length', 'importance' => 0.030194],
+            ['feature' => 'gmi', 'name' => 'GMI (Gross Margin Index)', 'importance' => 0.029379],
+            ['feature' => 'readability', 'name' => 'Readability Index', 'importance' => 0.023423],
+            ['feature' => 'lvgi', 'name' => 'LVGI (Leverage Index)', 'importance' => 0.018400],
+            ['feature' => 'sgai', 'name' => 'SGAI (Sales General & Admin Index)', 'importance' => 0.015965],
+            ['feature' => 'net_income_growth_assets', 'name' => 'Net Income Growth / Assets', 'importance' => 0.010057],
+            ['feature' => 'asset_growth', 'name' => 'Asset Growth Rate', 'importance' => 0.009250],
+        ];
+
+        $pdf = Pdf::loadView('ews.report_pdf', [
+            'record' => $record,
+            'history' => $history,
+            'rulesStatus' => $rulesStatus,
+            'mlApiAvailable' => $ml_api_available,
+            'aiCommentary' => $record->ai_commentary,
+            
+            // Model B props
+            'mlModelBProbability' => $ml_model_b_probability,
+            'mlModelBPrediction' => $ml_model_b_prediction,
+            'featuresImpactB' => $featuresImpactB,
+
+            // Model A props
+            'mlModelAProbability' => $ml_model_a_probability,
+            'mlModelAPrediction' => $ml_model_a_prediction,
+            'featuresImpactA' => $featuresImpactA,
+
+            // Global SHAP lists
+            'globalShapModelA' => $globalShapModelA,
+            'globalShapModelB' => $globalShapModelB,
+        ]);
+
+        return $pdf->download("EWS_Fraud_Report_{$record->kode}_{$record->tahun}.pdf");
     }
 
     public function history(Request $request): Response

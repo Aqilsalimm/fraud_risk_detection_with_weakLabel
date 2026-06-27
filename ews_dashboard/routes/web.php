@@ -19,6 +19,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/dashboard', [EwsController::class, 'index'])->name('dashboard');
     Route::get('/ews/check-lag', [EwsController::class, 'checkLag'])->name('ews.check-lag');
     Route::get('/ews/{id}', [EwsController::class, 'show'])->name('ews.show');
+    Route::get('/ews/{id}/export', [EwsController::class, 'export'])->name('ews.export');
     
     // Prediction History & Upload
     Route::get('/prediction-history', [EwsController::class, 'history'])->name('prediction.history');
